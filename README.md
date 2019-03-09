@@ -66,3 +66,9 @@ Options:
 Previously known as [github.com/rakyll/boom](https://github.com/rakyll/boom).
 
 Note: Requires go 1.7 or greater.
+
+## Examples for Tensorflow Grpc interface
+
+```
+-n 10000 -c 100 -mo tensorflow-feature-sum-model -v 1 -k X -d 1,2,3,4 -server-host-override grpc-model-server.default.example.com -insecure -g 192.168.140.140:31380
+```
