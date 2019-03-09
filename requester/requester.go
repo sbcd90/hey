@@ -17,7 +17,11 @@ package requester
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
+	"fmt"
+	"golang.org/x/net/http2"
+	"google.golang.org/grpc"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -25,9 +29,11 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"tensorflow/core/framework"
 	"time"
-
-	"golang.org/x/net/http2"
+	pb "tensorflow_serving/apis"
+	tf_core_framework "tensorflow/core/framework"
+	google_protobuf "github.com/gogo/protobuf/types"
 )
 
 // Max size of the buffer of result channel.
@@ -53,6 +59,18 @@ type Work struct {
 
 	RequestBody []byte
 
+	GrpcUrl string
+
+	ModelName string
+
+	ModelVersion int32
+
+	InputKey string
+
+	InputData []interface{}
+
+	InputFile string
+
 	// N is the total number of requests to make.
 	N int
 
@@ -61,6 +79,9 @@ type Work struct {
 
 	// H2 is an option to make HTTP/2 requests
 	H2 bool
+
+	// GRPC is an option to make TF Serving GRPC requests
+	GRPC bool
 
 	// Timeout in seconds.
 	Timeout int
@@ -76,6 +97,12 @@ type Work struct {
 
 	// DisableRedirects is an option to prevent the following of HTTP redirects
 	DisableRedirects bool
+
+	// Server Host Override for Tf serving Grpc requests.
+	ServerHostOverride string
+
+	// Grpc insecure flag
+	InsecureFlag bool
 
 	// Output represents the output type. If "csv" is provided, the
 	// output will be dumped as a csv stream.
@@ -121,7 +148,11 @@ func (b *Work) Run() {
 	go func() {
 		runReporter(b.report)
 	}()
-	b.runWorkers()
+	if !b.GRPC {
+		b.runWorkers()
+	} else {
+		b.runTFGrpcWorkers()
+	}
 	b.Finish()
 }
 
@@ -197,6 +228,40 @@ func (b *Work) makeRequest(c *http.Client) {
 	}
 }
 
+func (b *Work) makeTFGrpcRequest(c *pb.PredictionServiceClient, statsHandler *ClientStatsHandlerImpl)  {
+	s := now()
+	var size int64
+	var code int
+	var resStart time.Duration
+	var connDuration, resDuration time.Duration
+	req := cloneTFGrpcRequest(&pb.PredictRequest{}, b.ModelName, int64(b.ModelVersion),
+		b.InputKey, b.InputData)
+	resp, err := (*c).Predict(context.Background(), req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error while calling Grpc")
+		fmt.Fprintf(os.Stderr, "")
+		code = 500
+		os.Exit(1)
+	} else {
+		code = 200
+	}
+	resStart = (*statsHandler).ResStart
+	size = int64(resp.Size())
+	t := now()
+	resDuration = t - resStart
+	finish := t - s
+	connDuration = (*statsHandler).ConnEnd.Sub((*statsHandler).ConnStart).Round(time.Millisecond)
+	b.results <- &result{
+		offset:        s,
+		statusCode:    code,
+		duration:      finish,
+		err:           err,
+		contentLength: size,
+		connDuration:  connDuration,
+		resDuration:   resDuration,
+	}
+}
+
 func (b *Work) runWorker(client *http.Client, n int) {
 	var throttle <-chan time.Time
 	if b.QPS > 0 {
@@ -218,6 +283,21 @@ func (b *Work) runWorker(client *http.Client, n int) {
 				<-throttle
 			}
 			b.makeRequest(client)
+		}
+	}
+}
+
+func (b *Work) runTFGrpcWorker(client *pb.PredictionServiceClient, statsHandler *ClientStatsHandlerImpl, n int) {
+	var throttle <-chan time.Time
+	for i := 0; i < n; i++ {
+		select {
+		case <-b.stopCh:
+			return
+		default:
+			if b.QPS > 0 {
+				<-throttle
+			}
+			b.makeTFGrpcRequest(client, statsHandler)
 		}
 	}
 }
@@ -253,6 +333,50 @@ func (b *Work) runWorkers() {
 	wg.Wait()
 }
 
+func (b *Work) runTFGrpcWorkers() {
+	var wg sync.WaitGroup
+	wg.Add(b.C)
+
+	var opts []grpc.DialOption
+	if b.ServerHostOverride != "" {
+		opts = append(opts, grpc.WithAuthority(b.ServerHostOverride))
+	}
+	if b.InsecureFlag {
+		opts = append(opts, grpc.WithInsecure())
+	}
+	statsHandler := NewClientStatusHandler()
+	ClientStatsHandler, ok := statsHandler.(*ClientStatsHandlerImpl)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error with stats handler")
+		fmt.Fprintf(os.Stderr, "")
+		os.Exit(1)
+	}
+
+	opts = append(opts, grpc.WithStatsHandler(statsHandler))
+
+	if b.GrpcUrl != "" {
+		conn, err := grpc.Dial(b.GrpcUrl, opts...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error while opening Grpc conn")
+			fmt.Fprintf(os.Stderr, "")
+			os.Exit(1)
+		}
+
+		client := pb.NewPredictionServiceClient(conn)
+		for i := 0; i < b.C; i++ {
+			go func() {
+				b.runTFGrpcWorker(&client, ClientStatsHandler, b.N/b.C)
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+	} else {
+		fmt.Fprintf(os.Stderr, "Error while creating Grpc client")
+		fmt.Fprintf(os.Stderr, "")
+		os.Exit(1)
+	}
+}
+
 // cloneRequest returns a clone of the provided *http.Request.
 // The clone is a shallow copy of the struct and its Header map.
 func cloneRequest(r *http.Request, body []byte) *http.Request {
@@ -267,6 +391,116 @@ func cloneRequest(r *http.Request, body []byte) *http.Request {
 	if len(body) > 0 {
 		r2.Body = ioutil.NopCloser(bytes.NewReader(body))
 	}
+	return r2
+}
+
+// cloneTFGrpcRequest returns a clone of the provided *pb.PredictRequest.
+// The clone is a shallow copy of the struct and its Header map.
+func cloneTFGrpcRequest(r *pb.PredictRequest, ModelName string, ModelVersion int64,
+						InputKey string, InputData []interface{}) *pb.PredictRequest {
+	// shallow copy of the struct
+	r2 := new(pb.PredictRequest)
+	*r2 = *r
+	// deep copy of the Header
+	var Dtype tensorflow.DataType
+	tensorShapeProtoDim := tf_core_framework.TensorShapeProto_Dim{
+		Size_: int64(len(InputData)),
+	}
+
+	tensorShapeProtoDimArr := []*tf_core_framework.TensorShapeProto_Dim{&tensorShapeProtoDim}
+
+	var int16Arr   []int16
+	var int32Arr   []int32
+	var int64Arr   []int64
+	var float32Arr []float32
+	var float64Arr []float64
+	var stringArr  [][]byte
+
+
+	for i := 0; i < len(InputData); i++ {
+		switch v := InputData[i].(type) {
+		case int32:
+			Dtype = tf_core_framework.DataType_DT_INT32
+			int32Arr = append(int32Arr, v)
+		case int16:
+			Dtype = tf_core_framework.DataType_DT_INT16
+			int16Arr = append(int16Arr, v)
+		case int64:
+			Dtype = tf_core_framework.DataType_DT_INT64
+			int64Arr = append(int64Arr, v)
+		case int:
+			Dtype = tf_core_framework.DataType_DT_INT32
+			int32Arr = append(int32Arr, int32(v))
+		case float32:
+			Dtype = tf_core_framework.DataType_DT_FLOAT
+			float32Arr = append(float32Arr, v)
+		case float64:
+			Dtype = tf_core_framework.DataType_DT_DOUBLE
+			float64Arr = append(float64Arr, v)
+		case string:
+			Dtype = tf_core_framework.DataType_DT_STRING
+			stringArr = append(stringArr, []byte(v))
+		default:
+			fmt.Fprintf(os.Stderr, "The type of input could not be understood")
+			fmt.Fprintf(os.Stderr, "")
+			os.Exit(1)
+		}
+	}
+
+	var inputProto tf_core_framework.TensorProto
+	if len(int32Arr) > 0 {
+		inputProto = tf_core_framework.TensorProto{
+			Dtype: Dtype,
+			TensorShape: &tf_core_framework.TensorShapeProto{
+				Dim: tensorShapeProtoDimArr,
+			},
+			IntVal: int32Arr,
+		}
+	}
+	if len(int64Arr) > 0 {
+		inputProto = tf_core_framework.TensorProto{
+			Dtype: Dtype,
+			TensorShape: &tf_core_framework.TensorShapeProto{
+				Dim: tensorShapeProtoDimArr,
+			},
+			Int64Val: int64Arr,
+		}
+	}
+	if len(float32Arr) > 0 {
+		inputProto = tf_core_framework.TensorProto{
+			Dtype: Dtype,
+			TensorShape: &tf_core_framework.TensorShapeProto{
+				Dim: tensorShapeProtoDimArr,
+			},
+			FloatVal: float32Arr,
+		}
+	}
+	if len(float64Arr) > 0 {
+		inputProto = tf_core_framework.TensorProto{
+			Dtype: Dtype,
+			TensorShape: &tf_core_framework.TensorShapeProto{
+				Dim: tensorShapeProtoDimArr,
+			},
+			DoubleVal: float64Arr,
+		}
+	}
+	if len(stringArr) > 0 {
+		inputProto = tf_core_framework.TensorProto{
+			Dtype: Dtype,
+			TensorShape: &tf_core_framework.TensorShapeProto{
+				Dim: tensorShapeProtoDimArr,
+			},
+			StringVal: stringArr,
+		}
+	}
+	modelSpec := pb.ModelSpec{
+		Name: ModelName,
+		SignatureName: ModelName,
+		Version: &google_protobuf.Int64Value{Value: ModelVersion},
+	}
+	r2.Inputs = map[string]*tf_core_framework.TensorProto{
+		InputKey: &inputProto,}
+	r2.ModelSpec = &modelSpec
 	return r2
 }
 

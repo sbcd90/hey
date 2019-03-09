@@ -45,6 +45,11 @@ Options:
   -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
   -h2 Enable HTTP/2.
+  -g  Enable GRPC.
+  -M  Model Name.
+  -v  Model Version.
+  -k  Input Key.
+  -d  Input Data.
 
   -host	HTTP Host header.
 
@@ -53,7 +58,9 @@ Options:
                         connections between different HTTP requests.
   -disable-redirects    Disable following of HTTP redirects
   -cpus                 Number of used cpu cores.
-                        (default for current machine is 8 cores)
+                        (default for current machine is %d cores)
+  -server-host-override Server Host Override option in Grpc
+  -insecure             Insecure option in Grpc
 ```
 
 Previously known as [github.com/rakyll/boom](https://github.com/rakyll/boom).

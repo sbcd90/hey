@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,14 +40,17 @@ const (
 )
 
 var (
-	m           = flag.String("m", "GET", "")
-	headers     = flag.String("h", "", "")
-	body        = flag.String("d", "", "")
-	bodyFile    = flag.String("D", "", "")
-	accept      = flag.String("A", "", "")
-	contentType = flag.String("T", "text/html", "")
-	authHeader  = flag.String("a", "", "")
-	hostHeader  = flag.String("host", "", "")
+	m            = flag.String("m", "GET", "")
+	headers      = flag.String("h", "", "")
+	body         = flag.String("d", "", "")
+	bodyFile     = flag.String("D", "", "")
+	accept       = flag.String("A", "", "")
+	contentType  = flag.String("T", "text/html", "")
+	authHeader   = flag.String("a", "", "")
+	hostHeader   = flag.String("host", "", "")
+	modelName    = flag.String("mo", "", "")
+	modelVersion = flag.String("v", "", "")
+	inputKey     = flag.String("k", "", "")
 
 	output = flag.String("o", "", "")
 
@@ -57,12 +61,16 @@ var (
 	z = flag.Duration("z", 0, "")
 
 	h2   = flag.Bool("h2", false, "")
+	grpc = flag.Bool("g", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
 
 	disableCompression = flag.Bool("disable-compression", false, "")
 	disableKeepAlives  = flag.Bool("disable-keepalive", false, "")
 	disableRedirects   = flag.Bool("disable-redirects", false, "")
 	proxyAddr          = flag.String("x", "", "")
+
+	serverHostOverride = flag.String("server-host-override", "", "")
+	isInsecure         = flag.Bool("insecure", false, "")
 )
 
 var usage = `Usage: hey [options...] <url>
@@ -90,6 +98,11 @@ Options:
   -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
   -h2 Enable HTTP/2.
+  -g  Enable GRPC.
+  -M  Model Name.
+  -v  Model Version.
+  -k  Input Key.
+  -d  Input Data.
 
   -host	HTTP Host header.
 
@@ -99,6 +112,8 @@ Options:
   -disable-redirects    Disable following of HTTP redirects
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
+  -server-host-override Server Host Override option in Grpc
+  -insecure             Insecure option in Grpc
 `
 
 func main() {
@@ -168,52 +183,74 @@ func main() {
 		username, password = match[1], match[2]
 	}
 
-	var bodyAll []byte
-	if *body != "" {
-		bodyAll = []byte(*body)
-	}
-	if *bodyFile != "" {
-		slurp, err := ioutil.ReadFile(*bodyFile)
-		if err != nil {
-			errAndExit(err.Error())
-		}
-		bodyAll = slurp
-	}
-
 	var proxyURL *gourl.URL
-	if *proxyAddr != "" {
-		var err error
-		proxyURL, err = gourl.Parse(*proxyAddr)
+	var request  *http.Request
+	var bodyAll  []byte
+
+	var inputInterfaceArr []interface{}
+	if *grpc {
+		inputData := strings.Split(*body, ",")
+
+		for i := range inputData {
+			intValue, err := strconv.Atoi(inputData[i])
+			if err != nil {
+				inputInterfaceArr = []interface{}{}
+				break
+			}
+			inputInterfaceArr = append(inputInterfaceArr, intValue)
+		}
+	} else {
+		if *body != "" {
+			bodyAll = []byte(*body)
+		}
+		if *bodyFile != "" {
+			slurp, err := ioutil.ReadFile(*bodyFile)
+			if err != nil {
+				errAndExit(err.Error())
+			}
+			bodyAll = slurp
+		}
+
+		if *proxyAddr != "" {
+			var err error
+			proxyURL, err = gourl.Parse(*proxyAddr)
+			if err != nil {
+				usageAndExit(err.Error())
+			}
+		}
+
+		req, err := http.NewRequest(method, url, nil)
 		if err != nil {
 			usageAndExit(err.Error())
 		}
+		req.ContentLength = int64(len(bodyAll))
+		if username != "" || password != "" {
+			req.SetBasicAuth(username, password)
+		}
+
+		// set host header if set
+		if *hostHeader != "" {
+			req.Host = *hostHeader
+		}
+
+		ua := req.UserAgent()
+		if ua == "" {
+			ua = heyUA
+		} else {
+			ua += " " + heyUA
+		}
+		header.Set("User-Agent", ua)
+		req.Header = header
+		*request = *req
 	}
 
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		usageAndExit(err.Error())
+	var ModelVers int
+	if *modelVersion != "" {
+		ModelVers, _ = strconv.Atoi(*modelVersion)
 	}
-	req.ContentLength = int64(len(bodyAll))
-	if username != "" || password != "" {
-		req.SetBasicAuth(username, password)
-	}
-
-	// set host header if set
-	if *hostHeader != "" {
-		req.Host = *hostHeader
-	}
-
-	ua := req.UserAgent()
-	if ua == "" {
-		ua = heyUA
-	} else {
-		ua += " " + heyUA
-	}
-	header.Set("User-Agent", ua)
-	req.Header = header
 
 	w := &requester.Work{
-		Request:            req,
+		Request:            request,
 		RequestBody:        bodyAll,
 		N:                  num,
 		C:                  conc,
@@ -225,6 +262,14 @@ func main() {
 		H2:                 *h2,
 		ProxyAddr:          proxyURL,
 		Output:             *output,
+		GRPC:               *grpc,
+		GrpcUrl:            url,
+		ModelName:          *modelName,
+		ModelVersion:       int32(ModelVers),
+		InputKey:           *inputKey,
+		InputData:          inputInterfaceArr,
+		ServerHostOverride: *serverHostOverride,
+		InsecureFlag:       *isInsecure,
 	}
 	w.Init()
 
