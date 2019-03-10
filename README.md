@@ -2,22 +2,17 @@
 
 [![Build Status](https://travis-ci.org/rakyll/hey.svg?branch=master)](https://travis-ci.org/rakyll/hey)
 
-hey is a tiny program that sends some load to a web application.
-
-hey was originally called boom and was influenced from Tarek Ziade's
-tool at [tarekziade/boom](https://github.com/tarekziade/boom). Using the same name was a mistake as it resulted in cases
-where binary name conflicts created confusion.
-To preserve the name for its original owner, we renamed this project to hey.
+hey-for-TF-serving is a tiny program that sends some load to a tensorflow-serving grpc server hosted on Knative-serving/K8S.
 
 ## Installation
 
-    go get -u github.com/rakyll/hey
+    go get -u github.com/sbcd90/hey
 
 ## Usage
 
 hey runs provided number of requests in the provided concurrency level and prints stats.
 
-It also supports HTTP2 endpoints.
+This fork of hey is intended to support a tensorflow-serving grpc server hosted on Knative-serving/K8S.
 
 ```
 Usage: hey [options...] <url>
@@ -62,8 +57,6 @@ Options:
   -server-host-override Server Host Override option in Grpc
   -insecure             Insecure option in Grpc
 ```
-
-Previously known as [github.com/rakyll/boom](https://github.com/rakyll/boom).
 
 Note: Requires go 1.7 or greater.
 
