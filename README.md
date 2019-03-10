@@ -7,6 +7,10 @@ hey-for-TF-serving is a tiny program that sends some load to a tensorflow-servin
 ## Installation
 
     go get -u github.com/sbcd90/hey
+    
+## Generating Tensorflow-serving stubs
+
+A nice documentation on how to generate TF Grpc stubs in Go can be found [here](https://mauri870.github.io/blog/posts/tensorflow-serving-inception-go/).
 
 ## Usage
 
