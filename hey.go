@@ -48,7 +48,7 @@ var (
 	contentType  = flag.String("T", "text/html", "")
 	authHeader   = flag.String("a", "", "")
 	hostHeader   = flag.String("host", "", "")
-	modelName    = flag.String("mo", "", "")
+	modelName    = flag.String("M", "", "")
 	modelVersion = flag.String("v", "", "")
 	inputKey     = flag.String("k", "", "")
 
@@ -101,8 +101,8 @@ Options:
   -g  Enable GRPC.
   -M  Model Name.
   -v  Model Version.
-  -k  Input Key.
-  -d  Input Data.
+  -k  TensorProto Input Key.
+  -d  TensorProto Input Data.
 
   -host	HTTP Host header.
 
