@@ -40,6 +40,7 @@ Options:
   -A  HTTP Accept header.
   -d  HTTP request body.
   -D  HTTP request body from file. For example, /home/user/file.txt or ./file.txt.
+  -C  Server certificate from file. For example, /home/user/cert.txt or ./cert.txt.
   -T  Content-type, defaults to "text/html".
   -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
@@ -59,6 +60,7 @@ Options:
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
   -server-host-override Server Host Override option in Grpc
+  -oauth_token          OAuth Token for Grpc server
   -insecure             Insecure option in Grpc
 ```
 
