@@ -20,8 +20,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	google_protobuf "github.com/gogo/protobuf/types"
 	"golang.org/x/net/http2"
+	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
+	credentials2 "google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/oauth"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -30,10 +34,9 @@ import (
 	"os"
 	"sync"
 	"tensorflow/core/framework"
-	"time"
-	pb "tensorflow_serving/apis"
 	tf_core_framework "tensorflow/core/framework"
-	google_protobuf "github.com/gogo/protobuf/types"
+	pb "tensorflow_serving/apis"
+	"time"
 )
 
 // Max size of the buffer of result channel.
@@ -69,6 +72,8 @@ type Work struct {
 
 	InputData []interface{}
 
+	CertBytes []byte
+
 	InputFile string
 
 	// N is the total number of requests to make.
@@ -100,6 +105,8 @@ type Work struct {
 
 	// Server Host Override for Tf serving Grpc requests.
 	ServerHostOverride string
+
+	OAuthToken string
 
 	// Grpc insecure flag
 	InsecureFlag bool
@@ -344,6 +351,17 @@ func (b *Work) runTFGrpcWorkers() {
 	if b.InsecureFlag {
 		opts = append(opts, grpc.WithInsecure())
 	}
+
+	perRPC := oauth.NewOauthAccess(b.fetchToken())
+	if perRPC != nil {
+		opts = append(opts, grpc.WithPerRPCCredentials(perRPC))
+	}
+
+	credentials := b.fetchSSLContext()
+	if credentials != nil {
+		opts = append(opts, grpc.WithTransportCredentials(credentials))
+	}
+
 	statsHandler := NewClientStatusHandler()
 	ClientStatsHandler, ok := statsHandler.(*ClientStatsHandlerImpl)
 	if !ok {
@@ -509,4 +527,22 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (b *Work) fetchToken() *oauth2.Token {
+	return &oauth2.Token{
+		AccessToken: b.OAuthToken,
+		TokenType: "bearer",
+		Expiry: time.Now().Add(43199 * time.Second),
+	}
+}
+
+func (b *Work) fetchSSLContext() credentials2.TransportCredentials {
+	certBytes := b.CertBytes
+
+	cert := &tls.Certificate{
+		Certificate:  [][]byte{certBytes},
+	}
+	credentials := credentials2.NewServerTLSFromCert(cert)
+	return credentials
 }

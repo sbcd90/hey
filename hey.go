@@ -51,6 +51,7 @@ var (
 	modelName    = flag.String("M", "", "")
 	modelVersion = flag.String("v", "", "")
 	inputKey     = flag.String("k", "", "")
+	certFile     = flag.String("C", "", "")
 
 	output = flag.String("o", "", "")
 
@@ -70,6 +71,7 @@ var (
 	proxyAddr          = flag.String("x", "", "")
 
 	serverHostOverride = flag.String("server-host-override", "", "")
+	oAuthToken         = flag.String("oauth_token", "", "")
 	isInsecure         = flag.Bool("insecure", false, "")
 )
 
@@ -94,6 +96,7 @@ Options:
   -A  HTTP Accept header.
   -d  HTTP request body.
   -D  HTTP request body from file. For example, /home/user/file.txt or ./file.txt.
+  -C  Server certificate from file. For example, /home/user/cert.txt or ./cert.txt.
   -T  Content-type, defaults to "text/html".
   -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
@@ -113,6 +116,7 @@ Options:
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
   -server-host-override Server Host Override option in Grpc
+  -oauth_token          OAuth Token for Grpc server 
   -insecure             Insecure option in Grpc
 `
 
@@ -183,21 +187,30 @@ func main() {
 		username, password = match[1], match[2]
 	}
 
-	var proxyURL *gourl.URL
-	var request  *http.Request
-	var bodyAll  []byte
+	var proxyURL  *gourl.URL
+	var request   *http.Request
+	var bodyAll   []byte
+	var certBytes []byte
 
 	var inputInterfaceArr []interface{}
 	if *grpc {
-		inputData := strings.Split(*body, ",")
+		if *body != "" {
+			inputData := strings.Split(*body, ",")
 
-		for i := range inputData {
-			intValue, err := strconv.Atoi(inputData[i])
-			if err != nil {
-				inputInterfaceArr = []interface{}{}
-				break
+			for i := range inputData {
+				intValue, err := strconv.Atoi(inputData[i])
+				if err != nil {
+					inputInterfaceArr = append(inputInterfaceArr, inputData[i])
+				}
+				inputInterfaceArr = append(inputInterfaceArr, intValue)
 			}
-			inputInterfaceArr = append(inputInterfaceArr, intValue)
+		}
+		if *bodyFile != "" {
+			slurp, err := ioutil.ReadFile(*bodyFile)
+			if err != nil {
+				errAndExit(err.Error())
+			}
+			inputInterfaceArr = append(inputInterfaceArr, string(slurp))
 		}
 	} else {
 		if *body != "" {
@@ -209,6 +222,14 @@ func main() {
 				errAndExit(err.Error())
 			}
 			bodyAll = slurp
+		}
+
+		if *certFile != "" {
+			slurp, err := ioutil.ReadFile(*certFile)
+			if err != nil {
+				errAndExit(err.Error())
+			}
+			certBytes = slurp
 		}
 
 		if *proxyAddr != "" {
@@ -252,6 +273,7 @@ func main() {
 	w := &requester.Work{
 		Request:            request,
 		RequestBody:        bodyAll,
+		CertBytes:          certBytes,
 		N:                  num,
 		C:                  conc,
 		QPS:                q,
@@ -269,6 +291,7 @@ func main() {
 		InputKey:           *inputKey,
 		InputData:          inputInterfaceArr,
 		ServerHostOverride: *serverHostOverride,
+		OAuthToken:         *oAuthToken,
 		InsecureFlag:       *isInsecure,
 	}
 	w.Init()
