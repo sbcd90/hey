@@ -262,7 +262,7 @@ func main() {
 		}
 		header.Set("User-Agent", ua)
 		req.Header = header
-		*request = *req
+		request = req
 	}
 
 	var ModelVers int
