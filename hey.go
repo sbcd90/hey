@@ -188,7 +188,8 @@ func main() {
 	}
 
 	var proxyURL  *gourl.URL
-	var request   *http.Request
+	var req   *http.Request
+	var errReq error
 	var bodyAll   []byte
 	var certBytes []byte
 
@@ -240,10 +241,11 @@ func main() {
 			}
 		}
 
-		req, err := http.NewRequest(method, url, nil)
-		if err != nil {
-			usageAndExit(err.Error())
+		req, errReq = http.NewRequest(method, url, nil)
+		if errReq != nil {
+			usageAndExit(errReq.Error())
 		}
+
 		req.ContentLength = int64(len(bodyAll))
 		if username != "" || password != "" {
 			req.SetBasicAuth(username, password)
@@ -262,7 +264,6 @@ func main() {
 		}
 		header.Set("User-Agent", ua)
 		req.Header = header
-		request = req
 	}
 
 	var ModelVers int
@@ -271,7 +272,7 @@ func main() {
 	}
 
 	w := &requester.Work{
-		Request:            request,
+		Request:            req,
 		RequestBody:        bodyAll,
 		CertBytes:          certBytes,
 		N:                  num,
